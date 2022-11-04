@@ -3,14 +3,17 @@ package main
 import (
 	"bufio"
 	"fmt"
-	"github.com/codegangsta/cli"
-	"github.com/fatih/color"
-	"golang.org/x/crypto/ssh"
 	"io/ioutil"
+	"net"
 	"net/url"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/fatih/color"
+	"github.com/urfave/cli"
+	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/agent"
 )
 
 // Colors
@@ -37,6 +40,16 @@ func ReadHostsFromFile(file string) []string {
 	return results
 }
 
+func AgentAuth() ssh.AuthMethod {
+	socket := os.Getenv("SSH_AUTH_SOCK")
+	conn, err := net.Dial("unix", socket)
+	if err != nil {
+		return nil
+	}
+	agentClient := agent.NewClient(conn)
+	return ssh.PublicKeysCallback(agentClient.Signers)
+}
+
 func PublicKeyFile(file string) ssh.AuthMethod {
 	buffer, err := ioutil.ReadFile(file)
 	if err != nil {
@@ -56,6 +69,11 @@ func GetAuthPassword(password string) []ssh.AuthMethod {
 
 func GetAuthKeys(keys []string) []ssh.AuthMethod {
 	methods := []ssh.AuthMethod{}
+
+	aa := AgentAuth()
+	if aa != nil {
+		methods = append(methods, aa)
+	}
 
 	for _, keyname := range keys {
 		pkey := PublicKeyFile(keyname)
@@ -147,6 +165,7 @@ func main() {
 				cli.StringFlag{
 					Name: "keys",
 					Value: strings.Join([]string{
+						os.Getenv("HOME") + "/.ssh/id_ed25519",
 						os.Getenv("HOME") + "/.ssh/id_dsa",
 						os.Getenv("HOME") + "/.ssh/id_rsa",
 					}, ","),
@@ -187,16 +206,20 @@ func main() {
 							username = urlInfo.User.Username()
 						}
 						if password, ok := urlInfo.User.Password(); ok {
-							keys = GetAuthPassword(password)
+							keys = append(keys, GetAuthPassword(password)...)
 						}
 					}
 
 					// create new host config
 					hostConfigs[i] = HostConfig{
-						User:         username,
-						Host:         urlInfo.Host,
-						Timeout:      to,
-						ClientConfig: &ssh.ClientConfig{User: username, Auth: keys},
+						User:    username,
+						Host:    urlInfo.Host,
+						Timeout: to,
+						ClientConfig: &ssh.ClientConfig{
+							User:            username,
+							Auth:            keys,
+							HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+						},
 					}
 				}
 
