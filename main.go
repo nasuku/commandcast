@@ -7,10 +7,12 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/fatih/color"
+	"github.com/kevinburke/ssh_config"
 	"github.com/urfave/cli"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
@@ -191,15 +193,46 @@ func main() {
 					return
 				}
 
+				getSSHConfig := func() (*ssh_config.Config, error) {
+					configPath := filepath.Join(os.Getenv("HOME"), ".ssh", "config")
+					f, err := os.Open(configPath)
+					if err != nil {
+						return nil, err
+					}
+					defer f.Close()
+
+					sshCfg, err := ssh_config.Decode(f)
+					if err != nil { /* handle */
+						return nil, err
+					}
+					return sshCfg, nil
+				}
+
+				sshCfg, _ := getSSHConfig()
+
 				hostConfigs := make([]HostConfig, len(hosts))
 				for i, hostName := range hosts {
+
+					userName := user
+					if sshCfg != nil {
+						hn, _ := sshCfg.Get(hostName, "Hostname")
+						un, _ := sshCfg.Get(hostName, "User")
+						if hn != "" {
+							hostName = hn
+						}
+
+						if un != "" {
+							userName = un
+						}
+					}
+
 					urlInfo, err := url.Parse("ssh://" + hostName)
 					if err != nil || urlInfo.Host == "" {
 						continue
 					}
 
 					// client config
-					username := user
+					username := userName
 					keys := authKeys
 					if urlInfo.User != nil {
 						if urlInfo.User.Username() != "" {
